@@ -173,6 +173,8 @@ new_request_from_pool :: (client_socket: Socket) -> *Request {
   }
   request.raw.count = 0;
 
+  table_reset(*request.params);
+
   // #if parseheaders uninit(*request.headers);
   // #if parseheaders init(*request.headers);
   #if parseheaders table_reset(*request.headers);

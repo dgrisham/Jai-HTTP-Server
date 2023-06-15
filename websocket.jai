@@ -1,6 +1,3 @@
-
-
-
 // this is what a websocket frame looks like.
 // first 2 bytes are always the same.
 // if payload len is 126 then the payload len is actually the next u16
@@ -166,7 +163,7 @@ websocket_handle_request :: (request: *Request) {
 
     hash_ws_key :: (Sec_WebSocket_Key: string) -> string {
       data := tjoin(Sec_WebSocket_Key, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-      websocket_key_hash := base64_encode(xx sha1_binary(data)); #import,dir "modules/sha1"; #import "Base64_Encode";
+      websocket_key_hash := base64_encode(xx sha1_binary(data)); #import,dir "modules/sha1"; #import "Base64";
       return websocket_key_hash;
     }
   }

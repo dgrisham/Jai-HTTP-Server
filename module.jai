@@ -19,9 +19,10 @@ Middleware :: struct {
   cb: (*Request)->();
 }
 
-get  :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.GET , cb=cb, path=normalize_path(path)}); }
-post :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.POST, cb=cb, path=normalize_path(path)}); }
-any  :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.ANY , cb=cb, path=normalize_path(path)}); }
+get     :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.GET,     cb=cb, path=normalize_path(path)}); }
+post    :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.POST,    cb=cb, path=normalize_path(path)}); }
+any     :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.ANY,     cb=cb, path=normalize_path(path)}); }
+options :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.OPTIONS, cb=cb, path=normalize_path(path)}); }
 
 
 
@@ -226,13 +227,14 @@ file_cache_get_or_create :: (filename: string) -> File_Cache_Record, bool {
 
 
 
-METHOD :: enum u8 {ANY; GET; POST; PUT; DELETE;}
+METHOD :: enum u8 {ANY; GET; POST; PUT; DELETE; OPTIONS;}
 to_METHOD :: (str: string) -> METHOD {
   if str == {
     case "GET";     return .GET;
     case "POST";    return .POST;
     case "PUT";     return .PUT;
     case "DELETE";  return .DELETE;
+    case "OPTIONS"; return .OPTIONS;
     case;           return .ANY;
   }
 }

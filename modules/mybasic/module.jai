@@ -27,10 +27,10 @@ Cast :: (val: $T, $type: Type) -> type #expand {
 
 die :: (args: ..Any) {mylog("[die]"); mylog(..args); exit(1); }
 
-RELEASE :: #run () -> bool {
-  Compiler :: #import "Compiler";
-  return Compiler.get_build_options().optimization_level == .RELEASE;
-}();
+// RELEASE :: #run () -> bool {
+//   Compiler :: #import "Compiler";
+//   return Compiler.get_build_options().optimization_level == .RELEASE;
+// }();
 
 default_allocator :: context.default_allocator;
 tallocator :: temp;

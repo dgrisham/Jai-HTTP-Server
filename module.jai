@@ -32,16 +32,16 @@ options :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=
 send_html :: (request: *Request, html: string, status_code: u16 = 200, content_type: string = "text/html", content_encoding: string = "") {
   // todo: status_code 404 is responding with 404 OK; lol
   content_encoding_header := ifx content_encoding then tprint("Content-Encoding: %\r\n", content_encoding) else "";
-  http_response := tprint("HTTP/1.1 % OK\r\nConnection: Keep-Alive\r\nContent-Length: %\r\nContent-Type: %; charset=UTF-8\r\n%Server: Jai\r\n\r\n%", status_code, html.count, content_type, content_encoding_header, html);
+  http_response := tprint("HTTP/1.1 % OK\r\nConnection: Keep-Alive\r\nContent-Length: %\r\nContent-Type: %; charset=UTF-8\r\n%Server: Jai\r\nContent-Security-Policy: allow-same-origin\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET\r\nAccess-Control-Allow-Headers: Origin, Methods, Content-Type\r\n\r\n%", status_code, html.count, content_type, content_encoding_header, html);
 
   mysocket_write(request.socket, http_response);
   request.response_sent = true;
 }
 
 send_json :: (request: *Request, json: string) {
-  http_response := tprint("HTTP/1.1 200 OK\r\nConnection: Keep-Alive\r\nContent-Length: %\r\nContent-Type: application/json\r\n\r\n%", json.count, json);
-  mysocket_write(request.socket, http_response);
-  request.response_sent = true;
+    http_response := tprint("HTTP/1.1 200 OK\r\nConnection: Keep-Alive\r\nContent-Length: %\r\nContent-Type: application/json\r\nContent-Security-Policy: allow-same-origin\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET\r\nAccess-Control-Allow-Headers: Origin, Methods, Content-Type\r\n\r\n%", json.count, json);
+    mysocket_write(request.socket, http_response);
+    request.response_sent = true;
 }
 
 send_file :: (request: *Request, raw_filename: string) {

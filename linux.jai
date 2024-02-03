@@ -4,8 +4,7 @@
 
 BACKLOG               :: 1024;
 MAX_EVENTS            :: BACKLOG;
-// REQUEST_BUFFER_LEN    :: 1024 * 2;
-REQUEST_BUFFER_LEN    :: 16384 * 2;
+REQUEST_BUFFER_LEN    :: 1024 * 1024 * 50;
 
 CORE_COUNT            :: #run -> int {
   #import "System";

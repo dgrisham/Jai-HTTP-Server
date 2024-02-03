@@ -110,38 +110,6 @@ handle_request :: (request: *Request) {
     }
   }
 
-  // let the user's middleware handle the request!
-  for middleware: middlewares {
-
-    if request.response_sent then break; // once a middleware handles the request, we stop. this is first because webhook could've handled it already
-
-    if middleware.method != .ANY && middleware.method != request.method then continue;
-    // if middleware.path != "*" && middleware.path != request.path then continue;
-    if middleware.path != "*" && !is_path_match(middleware.path, path_normal) then continue;
-
-    middleware_contains_params := contains_prams(middleware.path);
-    if middleware_contains_params {
-      middleware_path_split := split(middleware.path, "/");
-      request_path_split := split(path_normal, "/");
-      for middleware_path_split {
-        if !contains_prams(it) continue;
-        param_name := middleware_path_split[it_index];
-        param_name.data += 1;
-        param_name.count -= 1;
-        // array_add(request.params, request_path_split[it_index]);
-        // request.params[param_name] = request_path_split[it_index];
-        // table_add(request.params, param_name, request_path_split[it_index]);
-        request.params[param_name] = request_path_split[it_index];
-      }
-    }
-
-    middleware.cb(request);
-  }
-
-  // if none of the middleware responded to this request, 404
-  if !request.response_sent then send_html(request, tprint("<pre>Cannot % %</pre>", request.method, request.path), status_code=404);
-
-
   contains_prams :: (s: string) -> bool {
     return contains(s, ":");
   }
@@ -163,6 +131,37 @@ handle_request :: (request: *Request) {
 
     return true;
   }
+
+  // let the user's middleware handle the request!
+  for middleware: middlewares {
+
+    if request.response_sent then break; // once a middleware handles the request, we stop. this is first because webhook could've handled it already
+
+    if middleware.method != .ANY && middleware.method != request.method then continue;
+    // if middleware.path != "*" && middleware.path != request.path then continue;
+    if middleware.path != "*" && !is_path_match(middleware.path, path_normal) then continue;
+
+    middleware_contains_params := contains_prams(middleware.path);
+    if middleware_contains_params {
+      middleware_path_split := split(middleware.path, "/");
+      request_path_split := split(path_normal, "/");
+      for middleware_path_split {
+        if !contains_prams(it) continue;
+        param_name := middleware_path_split[it_index];
+        param_name.data += 1;
+        param_name.count -= 1;
+        // array_add(request.params, request_path_split[it_index]);
+        // request.params[param_name] = request_path_split[it_index];
+        table_add(*request.params, param_name, request_path_split[it_index]);
+        // request.params[param_name] = request_path_split[it_index];
+      }
+    }
+
+    middleware.cb(request);
+  }
+
+  // if none of the middleware responded to this request, 404
+  if !request.response_sent then send_html(request, tprint("<pre>Cannot % %</pre>", request.method, request.path), status_code=404);
 }
 
 

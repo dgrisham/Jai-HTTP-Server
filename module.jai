@@ -21,6 +21,7 @@ Middleware :: struct {
 
 get     :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.GET,     cb=cb, path=normalize_path(path)}); }
 post    :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.POST,    cb=cb, path=normalize_path(path)}); }
+delete  :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.DELETE,  cb=cb, path=normalize_path(path)}); }
 any     :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.ANY,     cb=cb, path=normalize_path(path)}); }
 options :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.OPTIONS, cb=cb, path=normalize_path(path)}); }
 

@@ -88,6 +88,12 @@ Request :: struct {
     buffercursor  : u32;
     startofline   : u32;
   }
+
+  get_param :: (request: *Request, name: string) -> string {
+    val, found := table_find(*request.params, name);
+    if !found return "";
+    return val;
+  }
 }
 operator == :: inline (a: Request, b: Request) -> bool {return a.socket == b.socket; }
 
@@ -132,6 +138,16 @@ handle_request :: (request: *Request) {
     return true;
   }
 
+  path_normal := normalize_path(request.path);
+
+  if request.websocket_key {
+    if table_find_pointer(*websocket_servers, path_normal) {
+      websocket_handle_request(request);
+    } else {
+      // todo: received a websocket request for a path we're not listening to. maybe some kind of notification, send a proper decline response?
+    }
+  }
+
   // let the user's middleware handle the request!
   for middleware: middlewares {
 
@@ -141,6 +157,7 @@ handle_request :: (request: *Request) {
     // if middleware.path != "*" && middleware.path != request.path then continue;
     if middleware.path != "*" && !is_path_match(middleware.path, path_normal) then continue;
 
+    table_reset(*request.params); // maybe this should happen somewhere else?
     middleware_contains_params := contains_prams(middleware.path);
     if middleware_contains_params {
       middleware_path_split := split(middleware.path, "/");
@@ -260,6 +277,8 @@ extension2contenttype :: (filename: string) -> string {
     case ".ico";  return "image/x-icon";
     case ".jpg";  return "image/jpeg";
     case ".jpeg"; return "image/jpeg";
+    case ".ini";  return "text/plain";
+    case ".txt";  return "text/plain";
   }
 
   return "text/html";

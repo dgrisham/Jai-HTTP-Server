@@ -362,6 +362,10 @@ hex_chars_to_byte :: (chars: string) -> u8 {
 
 
 
+mysocket_close :: (socket: MySocket) {
+  close_and_reset(socket);
+}
+
 mysocket_read :: (socket: Socket, buffer: *u8, bufferlen: s32) -> s64 {
 
   #if OS == .LINUX

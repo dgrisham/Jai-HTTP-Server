@@ -1,6 +1,6 @@
 
 
-#load "websocket.jai";
+// #load "websocket.jai";
 
 #if OS == .WINDOWS #load "windows.jai";
 #if OS == .LINUX   #load "linux.jai";
@@ -15,15 +15,45 @@ middlewares: [..]Middleware;
 
 Middleware :: struct {
   method: METHOD;
-  path: string;
+  path: Router_Path;
   cb: (*Request)->();
 }
 
-get     :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.GET,     cb=cb, path=normalize_path(path)}); }
-post    :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.POST,    cb=cb, path=normalize_path(path)}); }
-delete  :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.DELETE,  cb=cb, path=normalize_path(path)}); }
-any     :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.ANY,     cb=cb, path=normalize_path(path)}); }
-options :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.OPTIONS, cb=cb, path=normalize_path(path)}); }
+Router_Path :: struct {
+    parts: [..] Path_Element;
+}
+
+Path_Element :: struct {
+    word     : string;
+    is_param : bool;
+}
+
+parse_router_path :: (s: string) -> Router_Path
+{
+    parts := split(s, "/");
+    path: Router_Path;
+    array_reserve(*path.parts, parts.count);
+    for parts
+    {
+        if it == "" continue;
+
+        path_part: Path_Element;
+        path_part.word     = it;
+        path_part.is_param = contains(it, #char ":");
+
+        array_add(*path.parts, path_part);
+    }
+
+    return path;
+}
+
+
+
+get     :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.GET,     cb=cb, path=parse_router_path(path)}); }
+post    :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.POST,    cb=cb, path=parse_router_path(path)}); }
+delete  :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.DELETE,  cb=cb, path=parse_router_path(path)}); }
+any     :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.ANY,     cb=cb, path=parse_router_path(path)}); }
+options :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.OPTIONS, cb=cb, path=parse_router_path(path)}); }
 
 
 
@@ -33,7 +63,17 @@ options :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=
 send_html :: (request: *Request, html: string, status_code: u16 = 200, content_type: string = "text/html", content_encoding: string = "") {
   // todo: status_code 404 is responding with 404 OK; lol
   content_encoding_header := ifx content_encoding then tprint("Content-Encoding: %\r\n", content_encoding) else "";
-  http_response := tprint("HTTP/1.1 % OK\r\nConnection: Keep-Alive\r\nContent-Length: %\r\nContent-Type: %; charset=UTF-8\r\n%Server: Jai\r\nContent-Security-Policy: allow-same-origin\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET\r\nAccess-Control-Allow-Headers: Origin, Methods, Content-Type\r\n\r\n%", status_code, html.count, content_type, content_encoding_header, html);
+  http_response: string;
+  push_context {
+      http_response = tprint(
+          "HTTP/1.1 % OK\r\nConnection: Keep-Alive\r\nContent-Length: %\r\nContent-Type: %; charset=UTF-8\r\n%Server: Jai\r\nContent-Security-Policy: allow-same-origin\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET\r\nAccess-Control-Allow-Headers: Origin, Methods, Content-Type\r\n\r\n%",
+          status_code,
+          html.count,
+          content_type,
+          content_encoding_header,
+          html
+      );
+  }
 
   mysocket_write(request.socket, http_response);
   request.response_sent = true;
@@ -69,14 +109,16 @@ Request :: struct {
 
   raw             : string; // entire raw http request
   body            : string; // pointer into raw
-  path            : string; // pointer into raw
+  raw_path        : string; // pointer into raw
+
+  path            : Request_Path;
 
   content_length  : u32;
   method          : METHOD;
-  websocket_key   : string;
+  // websocket_key   : string;
   accept_encoding : string;
 
-  params          : Table(string, string);
+  path_params     : Table(string, string);
   #if parseheaders {
     headers       : Table(string, string);
   }
@@ -90,7 +132,7 @@ Request :: struct {
   }
 
   get_param :: (request: *Request, name: string) -> string {
-    val, found := table_find(*request.params, name);
+    val, found := table_find(*request.path_params, name);
     if !found return "";
     return val;
   }
@@ -105,48 +147,40 @@ does_request_accept_encoding :: (request: *Request, encoding: string) -> bool {
   return false;
 }
 
-handle_request :: (request: *Request) {
-  path_normal := normalize_path(request.path);
-
-  if request.websocket_key {
-    if table_find_pointer(*websocket_servers, path_normal) {
-      websocket_handle_request(request);
-    } else {
-      // todo: received a websocket request for a path we're not listening to. maybe some kind of notification, send a proper decline response?
-    }
+handle_request :: (request: *Request)
+{
+  router_path_has_params :: (path: string) -> bool
+  {
+    return contains(path, #char ":");
   }
 
-  contains_prams :: (s: string) -> bool {
-    return contains(s, ":");
+  request_path_has_query_params :: (path: string) -> bool
+  {
+    return contains(path, #char "?");
   }
 
-  is_path_match :: (a: string, b: string) -> bool {
-    if !contains_prams(a) return a == b;
+  is_path_match :: (router_path: Router_Path, request: Request) -> bool
+  {
+    if router_path.parts.count != request.path.words.count return false;
 
-    parts_a := split(a, "/");
-    parts_b := split(b, "/");
-    if parts_a.count != parts_b.count return false;
-
-    for parts_a {
-      part_a := parts_a[it_index];
-      part_b := parts_b[it_index];
-      if !contains_prams(part_a) {
-        if part_a != part_b return false;
-      }
+    for router_path_part: router_path.parts
+    {
+        if router_path_part.is_param
+            continue;
+        if router_path_part.word != request.path.words[it_index]
+            return false;
     }
 
     return true;
   }
 
-  path_normal := normalize_path(request.path);
-
-  if request.websocket_key {
-    if table_find_pointer(*websocket_servers, path_normal) {
-      websocket_handle_request(request);
-    } else {
-      // todo: received a websocket request for a path we're not listening to. maybe some kind of notification, send a proper decline response?
-    }
-  }
+  // if request.websocket_key {
+  //   if table_find_pointer(*websocket_servers, path_normal) {
+  //     websocket_handle_request(request);
+  //   } else {
+  //     // todo: received a websocket request for a path we're not listening to. maybe some kind of notification, send a proper decline response?
+  //   }
+  // }
 
   // let the user's middleware handle the request!
   for middleware: middlewares {
@@ -154,33 +188,23 @@ handle_request :: (request: *Request) {
     if request.response_sent then break; // once a middleware handles the request, we stop. this is first because webhook could've handled it already
 
     if middleware.method != .ANY && middleware.method != request.method then continue;
-    // if middleware.path != "*" && middleware.path != request.path then continue;
-    if middleware.path != "*" && !is_path_match(middleware.path, path_normal) then continue;
+    if !(middleware.path.parts.count == 1 && middleware.path.parts[0].word == "*")
+    && !is_path_match(middleware.path, request)
+        continue;
 
-    table_reset(*request.params); // maybe this should happen somewhere else?
-    middleware_contains_params := contains_prams(middleware.path);
-    if middleware_contains_params {
-      middleware_path_split := split(middleware.path, "/");
-      request_path_split := split(path_normal, "/");
-      for middleware_path_split {
-        if !contains_prams(it) continue;
-        param_name := middleware_path_split[it_index];
-        param_name.data += 1;
-        param_name.count -= 1;
-        // array_add(request.params, request_path_split[it_index]);
-        // request.params[param_name] = request_path_split[it_index];
-        table_add(*request.params, param_name, request_path_split[it_index]);
-        // request.params[param_name] = request_path_split[it_index];
-      }
+    table_reset(*request.path_params); // maybe this should happen somewhere else?
+    for route_part: middleware.path.parts
+    {
+        if !route_part.is_param continue;
+        table_add(*request.path_params, route_part.word, request.path.words[it_index]);
     }
 
     middleware.cb(request);
   }
 
   // if none of the middleware responded to this request, 404
-  if !request.response_sent then send_html(request, tprint("<pre>Cannot % %</pre>", request.method, request.path), status_code=404);
+  if !request.response_sent then send_html(request, tprint("<pre>Cannot % %</pre>", request.method, request.raw_path), status_code=404);
 }
-
 
 cwd: string;
 the_static_folder_to_serve: string;
@@ -195,10 +219,10 @@ static :: (folder: string) {
 
     // if the path ends wht a / then we consider it a folder, and we'll add index.html to the end of the path to load that.
     path: string;
-    if ends_with(request.path, "/") {
-      path = tjoin(cwd, "/", the_static_folder_to_serve, request.path, "index.html");
+    if ends_with(request.raw_path, "/") {
+      path = tjoin(cwd, "/", the_static_folder_to_serve, request.raw_path, "index.html");
     } else {
-      path = tjoin(cwd, "/", the_static_folder_to_serve, request.path);
+      path = tjoin(cwd, "/", the_static_folder_to_serve, request.raw_path);
     }
 
     send_file(request, path);

@@ -165,15 +165,17 @@ new_request_from_pool :: (client_socket: Socket) -> *Request {
   request.buffercursor   = 0;
   request.startofline    = 0;
 
-  request.websocket_key.data = null;
-  request.websocket_key.count = 0;
+  // request.websocket_key.data = null;
+  // request.websocket_key.count = 0;
 
   if !request.raw.data {
     request.raw = alloc_string(REQUEST_BUFFER_LEN);
   }
   request.raw.count = 0;
 
-  table_reset(*request.params);
+  table_reset(*request.path_params);
+  array_reset(*request.path.words);
+  table_reset(*request.path.query_params);
 
   // #if parseheaders uninit(*request.headers);
   // #if parseheaders init(*request.headers);
@@ -185,12 +187,12 @@ new_request_from_pool :: (client_socket: Socket) -> *Request {
 handle_client_socket_accepted_or_read_ready :: (client_socket: Socket) {
   while 1 {
 
-    // if this socket is a websocket, not a request
-    ws := table_find_pointer(*all_websockets, client_socket);
-    if ws {
-      websocket_read_frame(ws);
-      return;
-    }
+    // // if this socket is a websocket, not a request
+    // ws := table_find_pointer(*all_websockets, client_socket);
+    // if ws {
+    //   websocket_read_frame(ws);
+    //   return;
+    // }
 
 
     request := read_http_request(client_socket);
@@ -250,8 +252,9 @@ read_http_request :: (socket: Socket) -> *Request {
 
         if request.startofline == 0 {
           http_request_info := split(line, " ");
-          request.method = to_METHOD(http_request_info[0]);
-          request.path = http_request_info[1];
+          request.method   = to_METHOD(http_request_info[0]);
+          request.raw_path = http_request_info[1];
+          parse_request_path(request);
           // request.http_version = http_request_info[2];
           continue;
         }
@@ -261,7 +264,7 @@ read_http_request :: (socket: Socket) -> *Request {
 
         if kv[0] == {
           case "Content-Length";    request.content_length   = xx to_integer(kv[1]);
-          case "Sec-WebSocket-Key"; request.websocket_key    = kv[1];
+          // case "Sec-WebSocket-Key"; request.websocket_key    = kv[1];
           case "Accept-Encoding";   request.accept_encoding  = kv[1];
         }
 
@@ -280,6 +283,32 @@ read_http_request :: (socket: Socket) -> *Request {
   return request;
 }
 
+Request_Path :: struct {
+    words        : [..] string;
+    query_params : Table(string, string);
+};
+
+parse_request_path :: (request: Request)
+{
+    found, path_without_params, query_param_strs := split_from_right(request.raw_path, "?");
+    if found
+    {
+        for query_param_str: split(query_param_strs, "&")
+        {
+            found, key, value := split_from_left(query_param_str, "=");
+            // TODO: if found is false, this is a bad request
+            table_add(*request.path.query_params, key, value);
+        }
+    }
+
+    parts := split(path_without_params, "/");
+    array_reserve(*request.path.words, parts.count);
+    for parts
+    {
+        if it == "" continue;
+        array_add(*request.path.words, it);
+    }
+}
 
 
 
@@ -333,7 +362,7 @@ setsocktcpopt :: (socket: s32, option: s32, optval: s32 = 1) {
   }
 }
 setnonblocking :: (fd: s32) {
-  old_option := fcntl(fd, F_GETFL);
+ old_option := fcntl(fd, F_GETFL);
   new_option := old_option | O_NONBLOCK;
   fcntl(fd, F_SETFL, new_option);
 }
@@ -345,8 +374,8 @@ add_to_epoll_fd_list :: (epoll_fd: s32, fd: s32, ptr: *void, ep_events: u32, $mo
   else   event.data.fd = fd;
   event.events = ep_events;
 
-  #if !mod if epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, *event)  die("add epoll_ctl() ADD");
-  #if  mod if epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, *event)  die("add epoll_ctl() MOD");
+  #if !mod if epoll_ctl(epoll_fd, Epoll_Ctl.ADD, fd, *event)  die("add epoll_ctl() ADD");
+  #if  mod if epoll_ctl(epoll_fd, Epoll_Ctl.MOD, fd, *event)  die("add epoll_ctl() MOD");
 }
 // remove_from_epoll_fd_list :: (fd: s32) {
 //   if epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, null)  die("remove epoll_ctl()");
@@ -379,6 +408,7 @@ get_ip_string_from_socket :: (socket: s32) -> string {
 #import,dir "modules/mysocket";
 
 #import "POSIX";
+#import "Linux"; // for epoll_create1
 #import "File";
 #import "Thread";
 

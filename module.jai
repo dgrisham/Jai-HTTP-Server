@@ -11,7 +11,7 @@
 
 
 // todo: this method of looping through middlewares is slow @perf
-middlewares: [..]Middleware;
+middlewares: [..] Middleware;
 
 Middleware :: struct {
   method: METHOD;
@@ -51,38 +51,129 @@ parse_router_path :: (s: string) -> Router_Path
 
 get     :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.GET,     cb=cb, path=parse_router_path(path)}); }
 post    :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.POST,    cb=cb, path=parse_router_path(path)}); }
+put     :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.PUT,     cb=cb, path=parse_router_path(path)}); }
 delete  :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.DELETE,  cb=cb, path=parse_router_path(path)}); }
 any     :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.ANY,     cb=cb, path=parse_router_path(path)}); }
 options :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.OPTIONS, cb=cb, path=parse_router_path(path)}); }
 
+Response :: struct {
+    status_code     := 200;
 
+    headers         : [..] HTTPHeader;
+    content_encoding: string;
+    body            : string;
+}
 
+HTTPHeader :: struct {
+    key, value: string;
+};
 
+add_headers :: (response: Response, headers: .. HTTPHeader)
+{
+    for headers
+    {
+        array_add(*response.headers, it);
+    }
+}
+
+send_response :: (request: *Request, response: Response)
+{
+    CRLF :: "\r\n";
+
+    response_builder: String_Builder;
+    init_string_builder(*response_builder);
+
+    using response;
+
+    append(*response_builder, tprint("HTTP/1.1 % %", status_code, status_code_string(status_code)));
+    append(*response_builder, CRLF);
+
+    append(*response_builder, tprint("Content-Length: %", body.count));
+    append(*response_builder, CRLF);
+
+    for headers
+    {
+        append(*response_builder, tprint("%: %", it.key, it.value));
+        append(*response_builder, CRLF);
+    }
+
+    append(*response_builder, "Content-Security-Policy: allow-same-origin");
+    append(*response_builder, CRLF);
+    append(*response_builder, "Access-Control-Allow-Origin: *");
+    append(*response_builder, CRLF);
+    append(*response_builder, "Access-Control-Allow-Methods: GET");
+    append(*response_builder, CRLF);
+    append(*response_builder, "Access-Control-Allow-Headers: Origin, Methods, Content-Type");
+    append(*response_builder, CRLF);
+
+    append(*response_builder, CRLF);
+    append(*response_builder, body);
+
+    mysocket_write(request.socket, builder_to_string(*response_builder));
+    mysocket_close(*request.socket);
+
+    request.response_sent = true;
+}
+
+status_code_string :: (status: int) -> string
+{
+    if status == {
+        case 100; return "Continue";
+        case 101; return "Switching Protocols";
+        case 200; return "OK";
+        case 201; return "Created";
+        case 202; return "Accepted";
+        case 203; return "Non-Authoritative Information";
+        case 204; return "No Content";
+        case 205; return "Reset Content";
+        case 206; return "Partial Content";
+        case 300; return "Multiple Choices";
+        case 301; return "Moved Permanently";
+        case 302; return "Found";
+        case 303; return "See Other";
+        case 304; return "Not Modified";
+        case 307; return "Temporary Redirect";
+        case 308; return "Permanent Redirect";
+        case 400; return "Bad Request";
+        case 401; return "Unauthorized";
+        case 403; return "Forbidden";
+        case 404; return "Not Found";
+        case 405; return "Method Not Allowed";
+        case 408; return "Request Timeout";
+        case 409; return "Conflict";
+        case 410; return "Gone";
+        case 413; return "Payload Too Large";
+        case 414; return "URI Too Long";
+        case 415; return "Unsupported Media Type";
+        case 418; return "I'm a teapot";
+        case 429; return "Too Many Requests";
+        case 500; return "Internal Server Error";
+        case 501; return "Not Implemented";
+        case 502; return "Bad Gateway";
+        case 503; return "Service Unavailable";
+        case 504; return "Gateway Timeout";
+        case 505; return "HTTP Version Not Supported";
+        case;     return "Server error";
+    }
+}
 
 
 send_html :: (request: *Request, html: string, status_code: u16 = 200, content_type: string = "text/html", content_encoding: string = "") {
-  // todo: status_code 404 is responding with 404 OK; lol
-  content_encoding_header := ifx content_encoding then tprint("Content-Encoding: %\r\n", content_encoding) else "";
-  http_response: string;
-  push_context {
-      http_response = tprint(
-          "HTTP/1.1 % OK\r\nConnection: Keep-Alive\r\nContent-Length: %\r\nContent-Type: %; charset=UTF-8\r\n%Server: Jai\r\nContent-Security-Policy: allow-same-origin\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET\r\nAccess-Control-Allow-Headers: Origin, Methods, Content-Type\r\n\r\n%",
-          status_code,
-          html.count,
-          content_type,
-          content_encoding_header,
-          html
-      );
-  }
+    response: Response;
+    response.status_code = status_code;
+    response.body = html;
+    add_headers(*response, .{"Content-Type", content_type}, .{"Server", "Jai"});
 
-  mysocket_write(request.socket, http_response);
-  request.response_sent = true;
+    send_response(request, response);
 }
 
 send_json :: (request: *Request, json: string) {
-    http_response := tprint("HTTP/1.1 200 OK\r\nConnection: Keep-Alive\r\nContent-Length: %\r\nContent-Type: application/json\r\nContent-Security-Policy: allow-same-origin\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET\r\nAccess-Control-Allow-Headers: Origin, Methods, Content-Type\r\n\r\n%", json.count, json);
-    mysocket_write(request.socket, http_response);
-    request.response_sent = true;
+    response: Response;
+    response.status_code = status_code;
+    response.body = json;
+    add_headers(*response, .{"Content-Type", "application/json"}, .{"Server", "Jai"});
+
+    send_response(request, response);
 }
 
 send_file :: (request: *Request, raw_filename: string) {
@@ -137,7 +228,7 @@ Request :: struct {
     return val;
   }
 }
-operator == :: inline (a: Request, b: Request) -> bool {return a.socket == b.socket; }
+operator == :: inline (a: Request, b: Request) -> bool { return a.socket == b.socket; }
 
 does_request_accept_encoding :: (request: *Request, encoding: string) -> bool {
   if !request.accept_encoding return false;
@@ -149,16 +240,6 @@ does_request_accept_encoding :: (request: *Request, encoding: string) -> bool {
 
 handle_request :: (request: *Request)
 {
-  router_path_has_params :: (path: string) -> bool
-  {
-    return contains(path, #char ":");
-  }
-
-  request_path_has_query_params :: (path: string) -> bool
-  {
-    return contains(path, #char "?");
-  }
-
   is_path_match :: (router_path: Router_Path, request: Request) -> bool
   {
     if router_path.parts.count != request.path.words.count return false;
@@ -174,13 +255,8 @@ handle_request :: (request: *Request)
     return true;
   }
 
-  // if request.websocket_key {
-  //   if table_find_pointer(*websocket_servers, path_normal) {
-  //     websocket_handle_request(request);
-  //   } else {
-  //     // todo: received a websocket request for a path we're not listening to. maybe some kind of notification, send a proper decline response?
-  //   }
-  // }
+  push_allocator(temp);
+  defer reset_temporary_storage();
 
   // let the user's middleware handle the request!
   for middleware: middlewares {
@@ -360,14 +436,10 @@ hex_chars_to_byte :: (chars: string) -> u8 {
 
 
 
+mysocket_close :: socket_close;
 
-
-mysocket_close :: (socket: MySocket) {
-  close_and_reset(socket);
-}
-
-mysocket_read :: (socket: Socket, buffer: *u8, bufferlen: s32) -> s64 {
-
+mysocket_read :: (socket: Socket, buffer: *u8, bufferlen: s32) -> s64
+{
   #if OS == .LINUX
     if ssl_is_socket_ssl(socket) // perf hash table lookup
       return ssl_read(socket, buffer, xx bufferlen);
@@ -375,11 +447,28 @@ mysocket_read :: (socket: Socket, buffer: *u8, bufferlen: s32) -> s64 {
   return recv(socket, buffer, xx bufferlen, 0);
 }
 
-mysocket_write :: (socket: Socket, buffer: string) -> s64 {
+// even with this errno check, signal(SIGPIPE, SIG_IGN) still seems necessary to stop the program from crashing on SIGPIPE
+mysocket_write :: (socket: *Socket, buffer: string) -> bool
+{
+    if mysocket_send(<<socket, buffer) < 0
+    {
+        if errno() == EPIPE
+        {
+            log("Client disconnected or connection closed");
+            socket_close(socket);
+        }
+        return false;
+    }
+    return true;
+}
+
+mysocket_send :: (socket: Socket, buffer: string) -> s64 {
 
   #if OS == .LINUX
     if ssl_is_socket_ssl(socket) // perf hash table lookup
+    {
       return ssl_write(socket, buffer.data, xx buffer.count);
+    }
 
   return send(socket, buffer.data, xx buffer.count, 0);
 }

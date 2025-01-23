@@ -10,10 +10,10 @@
 
 
 
-// todo: this method of looping through middlewares is slow @perf
-middlewares: [..] Middleware;
+// todo: this method of looping through handlers is slow @perf
+handlers: [..] Handler;
 
-Middleware :: struct {
+Handler :: struct {
   method: METHOD;
   path: Router_Path;
   cb: (*Request)->();
@@ -47,39 +47,117 @@ parse_router_path :: (s: string) -> Router_Path
     return path;
 }
 
+get     :: (path: string, cb: (*Request)->()) {array_add(*handlers, .{method=.GET,     cb=cb, path=parse_router_path(path)}); }
+post    :: (path: string, cb: (*Request)->()) {array_add(*handlers, .{method=.POST,    cb=cb, path=parse_router_path(path)}); }
+put     :: (path: string, cb: (*Request)->()) {array_add(*handlers, .{method=.PUT,     cb=cb, path=parse_router_path(path)}); }
+delete  :: (path: string, cb: (*Request)->()) {array_add(*handlers, .{method=.DELETE,  cb=cb, path=parse_router_path(path)}); }
+any     :: (path: string, cb: (*Request)->()) {array_add(*handlers, .{method=.ANY,     cb=cb, path=parse_router_path(path)}); }
+options :: (path: string, cb: (*Request)->()) {array_add(*handlers, .{method=.OPTIONS, cb=cb, path=parse_router_path(path)}); }
 
+// Response_Writer is for more fine-grained control of the http response
+// (e.g. flushing headers, writing SSE events to the body without closing the connection, etc.)
 
-get     :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.GET,     cb=cb, path=parse_router_path(path)}); }
-post    :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.POST,    cb=cb, path=parse_router_path(path)}); }
-put     :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.PUT,     cb=cb, path=parse_router_path(path)}); }
-delete  :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.DELETE,  cb=cb, path=parse_router_path(path)}); }
-any     :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.ANY,     cb=cb, path=parse_router_path(path)}); }
-options :: (path: string, cb: (*Request)->()) {array_add(*middlewares, .{method=.OPTIONS, cb=cb, path=parse_router_path(path)}); }
+Response_Writer :: struct {
+    socket  : MySocket;
+    builder : String_Builder;
+};
+
+New_Response_Writer :: (request: *Request, status_code := 200) -> Response_Writer
+{
+    w: Response_Writer;
+    w.socket = request.socket;
+
+    append(*w.builder, tprint("HTTP/1.1 % %", status_code, status_code_string(status_code)));
+    append(*w.builder, CRLF);
+
+    write_headers(
+        w,
+        .{"Content-Security-Policy"     , "allow-same-origin"            },
+        .{"Access-Control-Allow-Origin" ,  "*"                           },
+        .{"Access-Control-Allow-Methods", "GET"                          },
+        .{"Access-Control-Allow-Headers", "Origin, Methods, Content-Type"},
+    );
+
+    return w;
+}
+
+// headers
+
+Header :: struct {
+    key, value: string;
+};
+
+write_headers :: (using w: Response_Writer, headers: .. Header)
+{
+    for headers
+    {
+        append(*builder, tprint("%: %", it.key, it.value));
+        append(*builder, CRLF);
+    }
+}
+
+flush_headers :: (using w: Response_Writer) -> bool
+{
+    // add final CRLF to delineate headers from body
+    append(*builder, CRLF);
+
+    return mysocket_write(socket, builder_to_string(*builder));
+}
+
+// body
+
+append :: (using w: Response_Writer, data: .. string)
+{
+    for data  append(*builder, it);
+}
+
+flush :: (using w: Response_Writer) -> bool
+{
+    return mysocket_write(socket, builder_to_string(*builder));
+}
+
+finish :: (using w: Response_Writer)
+{
+    mysocket_close(socket);
+}
+
+// Response
 
 Response :: struct {
+
     status_code     := 200;
 
-    headers         : [..] HTTPHeader;
+    socket          : MySocket;
+    headers         : [..] Header;
     content_encoding: string;
     body            : string;
 }
 
-HTTPHeader :: struct {
-    key, value: string;
-};
-
-add_headers :: (response: Response, headers: .. HTTPHeader)
+add_headers :: (response: Response, headers: .. Header)
 {
-    for headers
-    {
-        array_add(*response.headers, it);
-    }
+    for headers array_add(*response.headers, it);
 }
+
+New_Response :: (request: *Request) -> Response
+{
+    response: Response;
+    response.socket = request.socket;
+
+    add_headers(
+        *response,
+        .{"Content-Security-Policy"     , "allow-same-origin"            },
+        .{"Access-Control-Allow-Origin" ,  "*"                           },
+        .{"Access-Control-Allow-Methods", "GET"                          },
+        .{"Access-Control-Allow-Headers", "Origin, Methods, Content-Type"},
+    );
+
+    return response;
+}
+
+CRLF :: "\r\n";
 
 send_response :: (request: *Request, response: Response)
 {
-    CRLF :: "\r\n";
-
     response_builder: String_Builder;
     init_string_builder(*response_builder);
 
@@ -97,22 +175,11 @@ send_response :: (request: *Request, response: Response)
         append(*response_builder, CRLF);
     }
 
-    append(*response_builder, "Content-Security-Policy: allow-same-origin");
-    append(*response_builder, CRLF);
-    append(*response_builder, "Access-Control-Allow-Origin: *");
-    append(*response_builder, CRLF);
-    append(*response_builder, "Access-Control-Allow-Methods: GET");
-    append(*response_builder, CRLF);
-    append(*response_builder, "Access-Control-Allow-Headers: Origin, Methods, Content-Type");
-    append(*response_builder, CRLF);
-
     append(*response_builder, CRLF);
     append(*response_builder, body);
 
     mysocket_write(request.socket, builder_to_string(*response_builder));
     mysocket_close(*request.socket);
-
-    request.response_sent = true;
 }
 
 status_code_string :: (status: int) -> string
@@ -214,7 +281,7 @@ Request :: struct {
     headers       : Table(string, string);
   }
 
-  response_sent   : bool;
+  cookies         : Table(string, string);
   err             : bool;
 
   #if OS == .LINUX {
@@ -242,7 +309,8 @@ handle_request :: (request: *Request)
 {
   is_path_match :: (router_path: Router_Path, request: Request) -> bool
   {
-    if router_path.parts.count != request.path.words.count return false;
+    if router_path.parts.count != request.path.words.count
+        return false;
 
     for router_path_part: router_path.parts
     {
@@ -258,17 +326,15 @@ handle_request :: (request: *Request)
   push_allocator(temp);
   defer reset_temporary_storage();
 
+  // push_context { log("Have request on: %", request.path); }
+
   // let the user's middleware handle the request!
-  for middleware: middlewares {
-
-    if request.response_sent then break; // once a middleware handles the request, we stop. this is first because webhook could've handled it already
-
-    if middleware.method != .ANY && middleware.method != request.method then continue;
-    if !(middleware.path.parts.count == 1 && middleware.path.parts[0].word == "*")
-    && !is_path_match(middleware.path, request)
+  for middleware: handlers
+  {
+    if !is_path_match(middleware.path, request)
         continue;
 
-    table_reset(*request.path_params); // maybe this should happen somewhere else?
+    // table_reset(*request.path_params); // maybe this should happen somewhere else?
     for route_part: middleware.path.parts
     {
         if !route_part.is_param continue;
@@ -276,10 +342,14 @@ handle_request :: (request: *Request)
     }
 
     middleware.cb(request);
+
+    return;
   }
 
   // if none of the middleware responded to this request, 404
-  if !request.response_sent then send_html(request, tprint("<pre>Cannot % %</pre>", request.method, request.raw_path), status_code=404);
+  push_context {
+      send_html(request, tprint("<pre>Cannot % %</pre>", request.method, request.raw_path), status_code=404);
+  }
 }
 
 cwd: string;
@@ -455,7 +525,7 @@ mysocket_write :: (socket: *Socket, buffer: string) -> bool
         if errno() == EPIPE
         {
             log("Client disconnected or connection closed");
-            socket_close(socket);
+            mysocket_close(socket);
         }
         return false;
     }

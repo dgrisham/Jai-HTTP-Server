@@ -95,7 +95,10 @@ create_listen_socket :: (port: u16, ip: string) -> Socket {
 
 
 thread_pool_proc :: (thread: *Thread) -> s64 {
-  ts: Temporary_Storage; context.temporary_storage = *ts;
+  // unsure why this line was here, as each thread should already have its own temp storage? commenting out for now
+  // - dgrisham
+  // ts: Temporary_Storage; context.temporary_storage = *ts;
+
   thread_id := cast(s32)thread.data;
   epoll_fd := epoll_fd_pool[thread_id];
 
@@ -143,7 +146,7 @@ thread_pool_proc :: (thread: *Thread) -> s64 {
       }
     }
 
-    tfree();
+    reset_temporary_storage();
   }
 
   return 0;
@@ -159,7 +162,7 @@ new_request_from_pool :: (client_socket: Socket) -> *Request {
   request: *Request = find_or_add(*request_pool, client_socket);
   request.content_length = 0;
   request.body.data      = null;
-  request.response_sent  = false;
+  // request.response_sent  = false;
   request.err            = false;
   request.socket         = make_mysocket(client_socket);
   request.buffercursor   = 0;
@@ -179,22 +182,18 @@ new_request_from_pool :: (client_socket: Socket) -> *Request {
 
   // #if parseheaders uninit(*request.headers);
   // #if parseheaders init(*request.headers);
-  #if parseheaders table_reset(*request.headers);
+  #if parseheaders
+  {
+      table_reset(*request.headers);
+      table_reset(*request.cookies);
+  }
 
   return request;
 }
 
 handle_client_socket_accepted_or_read_ready :: (client_socket: Socket) {
-  while 1 {
-
-    // // if this socket is a websocket, not a request
-    // ws := table_find_pointer(*all_websockets, client_socket);
-    // if ws {
-    //   websocket_read_frame(ws);
-    //   return;
-    // }
-
-
+  while 1
+  {
     request := read_http_request(client_socket);
     if request == null  return; // we're waiting to read, need to come back later
     if request.err {
@@ -260,12 +259,27 @@ read_http_request :: (socket: Socket) -> *Request {
         }
 
         kv := split(line, ": ");
-        #if parseheaders table_add(*request.headers, kv[0], kv[1]);
 
         if kv[0] == {
-          case "Content-Length";    request.content_length   = xx to_integer(kv[1]);
+          case "Content-Length";
+            request.content_length = xx to_integer(kv[1]);
           // case "Sec-WebSocket-Key"; request.websocket_key    = kv[1];
-          case "Accept-Encoding";   request.accept_encoding  = kv[1];
+          case "Accept-Encoding";
+            request.accept_encoding = kv[1];
+          case "Cookie"; #through;
+          case "cookie";
+            for split(kv[1], ", ")
+            {
+                cookie_kv := split(it, "=");
+                if cookie_kv.count != 2
+                {
+                    log("Bad cookie: %", it);
+                    continue;
+                }
+                table_add(*request.cookies, cookie_kv[0], cookie_kv[1]);
+            }
+            case;
+                #if parseheaders table_add(*request.headers, kv[0], kv[1]);
         }
 
         if request.raw[request.buffercursor+2] == #char "\r" && request.raw[request.buffercursor+2 + 1] == #char "\n" {

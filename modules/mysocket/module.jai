@@ -16,9 +16,9 @@ MySocket :: struct {#as socket: Socket; }
 
 socket_uninit :: () {WSACleanup();}
 
-socket_close :: (socket: Socket) {
-  #if OS == .LINUX   close(socket);
-  #if OS == .WINDOWS closesocket(socket);
+
+socket_close :: (socket: *Socket) {
+    close_and_reset(socket);
 }
 
 #if OS == .LINUX {

@@ -224,41 +224,37 @@ status_code_string :: (status: int) -> string
     }
 }
 
+send_html :: #bake_arguments build_and_send_response(content_type="text/html");
+send_text :: #bake_arguments build_and_send_response(content_type="text/plain");
+send_json :: #bake_arguments build_and_send_response(content_type="application/json");
 
-send_html :: (request: *Request, html: string, status_code: u16 = 200, content_type: string = "text/html", content_encoding: string = "") {
+build_and_send_response :: (request: *Request, body: string, status_code: u16 = 200, content_type := "", content_encoding: string = "")
+{
     response: Response;
-    response.status_code = status_code;
-    response.body = html;
+    response.status_code      = status_code;
+    response.content_encoding = content_encoding;
+    response.body             = body;
     add_headers(*response, .{"Content-Type", content_type}, .{"Server", "Jai"});
 
     send_response(request, response);
 }
 
-send_json :: (request: *Request, json: string) {
-    response: Response;
-    response.status_code = status_code;
-    response.body = json;
-    add_headers(*response, .{"Content-Type", "application/json"}, .{"Server", "Jai"});
+// send_file :: (request: *Request, raw_filename: string) {
+//   filename := normalize_filename(raw_filename);
 
-    send_response(request, response);
-}
+//   file_cache_record, success := file_cache_get_or_create(filename);
+//   if !success return;
 
-send_file :: (request: *Request, raw_filename: string) {
-  filename := normalize_filename(raw_filename);
+//   // for very small files, it's possible that brotli encoding is longer than the raw content.
+//   // in that case the brotli api will return the brotli encoding as ""
+//   // and so we will return the raw content instead, even though the client accepts br encoding
+//   are_we_returning_br := does_request_accept_encoding(request, "br") && file_cache_record.brotli != "";
 
-  file_cache_record, success := file_cache_get_or_create(filename);
-  if !success return;
-
-  // for very small files, it's possible that brotli encoding is longer than the raw content.
-  // in that case the brotli api will return the brotli encoding as ""
-  // and so we will return the raw content instead, even though the client accepts br encoding
-  are_we_returning_br := does_request_accept_encoding(request, "br") && file_cache_record.brotli != "";
-
-  content := ifx are_we_returning_br then file_cache_record.brotli else file_cache_record.rawcontent;
-  content_encoding := ifx are_we_returning_br then "br" else "";
-  content_type := extension2contenttype(filename);
-  send_html(request, content, content_type=content_type, content_encoding=content_encoding);
-}
+//   content := ifx are_we_returning_br then file_cache_record.brotli else file_cache_record.rawcontent;
+//   content_encoding := ifx are_we_returning_br then "br" else "";
+//   content_type := extension2contenttype(filename);
+//   send_response(request, content, content_type=content_type, content_encoding=content_encoding);
+// }
 
 
 parseheaders :: true;
@@ -285,8 +281,8 @@ Request :: struct {
   err             : bool;
 
   #if OS == .LINUX {
-    buffercursor  : u32;
-    startofline   : u32;
+    buffercursor     : u32;
+    startofline      : u32;
   }
 
   get_param :: (request: *Request, name: string) -> string {
@@ -427,14 +423,12 @@ to_METHOD :: (str: string) -> METHOD {
 }
 
 
-
+// Content-Type aka MIME type
 extension2contenttype :: (filename: string) -> string {
   index_of_dot := find_index_from_right(filename, ".");
   if index_of_dot == -1 return "text/html";
 
-  extension: string;
-  extension.data = filename.data + index_of_dot;
-  extension.count = filename.count - index_of_dot;
+  extension := substr(filename, index_of_dot, filename.count-index_of_dot);
 
   if extension == {
     case ".css";  return "text/css";
@@ -447,8 +441,10 @@ extension2contenttype :: (filename: string) -> string {
     case ".ico";  return "image/x-icon";
     case ".jpg";  return "image/jpeg";
     case ".jpeg"; return "image/jpeg";
+    case ".svg";  return "image/svg+xml";
     case ".ini";  return "text/plain";
     case ".txt";  return "text/plain";
+    case ".exe";  return "application/octet-stream";
   }
 
   return "text/html";
@@ -517,28 +513,33 @@ mysocket_read :: (socket: Socket, buffer: *u8, bufferlen: s32) -> s64
   return recv(socket, buffer, xx bufferlen, 0);
 }
 
-// even with this errno check, signal(SIGPIPE, SIG_IGN) still seems necessary to stop the program from crashing on SIGPIPE
 mysocket_write :: (socket: *Socket, buffer: string) -> bool
 {
-    if mysocket_send(<<socket, buffer) < 0
+    bytes := buffer.count;
+    sent := 0;
+    while sent < bytes
     {
-        if errno() == EPIPE
+        result := mysocket_send(<<socket, buffer);
+        if result < 0
         {
-            log("Client disconnected or connection closed");
-            mysocket_close(socket);
+            err := errno();
+            if err == {
+              case EPIPE; // even with this EPIPE check, signal(SIGPIPE, SIG_IGN) still seems necessary to stop the program from crashing on SIGPIPE
+                log("Client disconnected or connection closed");
+                mysocket_close(socket);
+              case;
+                log("Error writing to socket: %", err);
+            }
+            return false;
         }
-        return false;
+        sent += result;
     }
     return true;
 }
 
 mysocket_send :: (socket: Socket, buffer: string) -> s64 {
-
-  #if OS == .LINUX
     if ssl_is_socket_ssl(socket) // perf hash table lookup
-    {
       return ssl_write(socket, buffer.data, xx buffer.count);
-    }
 
   return send(socket, buffer.data, xx buffer.count, 0);
 }

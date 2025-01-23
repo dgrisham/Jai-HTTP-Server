@@ -131,19 +131,27 @@ thread_pool_proc :: (thread: *Thread) -> s64 {
           if event.data.fd == listen_socket_ssl then ssl_make_socket_ssl(client_socket);
 
           new_request_from_pool(client_socket);
-          handle_client_socket_accepted_or_read_ready(client_socket);
+          handle_client_socket_accepted_or_read_ready(client_socket, epoll_fd);
         }
 
         continue;
       }
 
-      // not the listen socket, must be a client_socket ready to read ... right?
+      // not the listen socket, must be a client_socket ready to read or write ... right?
       if event.events & EPOLLIN {
         client_socket := event.data.fd;
-        handle_client_socket_accepted_or_read_ready(client_socket);
+        handle_client_socket_accepted_or_read_ready(client_socket, epoll_fd);
         // add_to_epoll_fd_list(epoll_fd, client_socket, null, EPOLLIN | EPOLLET | EPOLLONESHOT, mod=true);
         continue;
       }
+
+      // if event.events & EPOLLOUT {
+      //   client_socket := event.data.fd;
+      //   request := table_find_pointer(*request_pool, client_socket);
+      //   // if !request || !request.write_data continue;
+      //   // continue_write(request);
+      //   continue;
+      // }
     }
 
     reset_temporary_storage();
@@ -191,7 +199,7 @@ new_request_from_pool :: (client_socket: Socket) -> *Request {
   return request;
 }
 
-handle_client_socket_accepted_or_read_ready :: (client_socket: Socket) {
+handle_client_socket_accepted_or_read_ready :: (client_socket: Socket, epoll_fd: s32) {
   while 1
   {
     request := read_http_request(client_socket);
@@ -212,6 +220,7 @@ handle_client_socket_accepted_or_read_ready :: (client_socket: Socket) {
 
 
 // todo: i think i have to rewrite this to handle read() not giving us a full line
+// this is slowwwwww. maybe i should use faster string compares
 read_http_request :: (socket: Socket) -> *Request {
   request: *Request = table_find_pointer(*request_pool, socket);
   if request == null then die("no request for socket", socket);
@@ -224,7 +233,10 @@ read_http_request :: (socket: Socket) -> *Request {
     if bytes_received == 0 {
       if request.raw.count == REQUEST_BUFFER_LEN {
         mylog("pretty sure this means we ran out of buffer space for this request so we had to drop it!");
-        send_html(request, tprint("Request too large. Max request size is % bytes.", REQUEST_BUFFER_LEN), status_code=413);
+        send_text(request, tprint("Request too large. Max request size is % bytes.", REQUEST_BUFFER_LEN), status_code=413);
+        push_context {
+            send_html(request, tprint("Request too large. Max request size is % bytes.", REQUEST_BUFFER_LEN), status_code=413);
+        }
       }
       request.err = true;
       break;
@@ -324,18 +336,27 @@ parse_request_path :: (request: Request)
     }
 }
 
+// continue_write :: (request: *Request) {
+//   while request.write_bytes_sent < request.write_data.count {
+//     remaining_bytes_to_write := substr(request.write_data, request.write_bytes_sent);
+//     bytes_written := mysocket_send(request.socket, remaining_bytes_to_write);
 
+//     if bytes_written < 0 {
+//       if errno() == EWOULDBLOCK {
+//         add_to_epoll_fd_list(request.epoll_fd, request.socket.socket, null, EPOLLOUT, mod=true);
+//         return;
+//       }
+//       mylog("well, this is really bad: Error writing to socket: %", errno());
+//       return;
+//     }
 
+//     request.write_bytes_sent += bytes_written;
+//   }
 
-// send_file :: (request: *Request, filename: string) {
-//   file_cache_record, success := file_cache_get_or_create(filename);
-//   if !success return;
-
-//   content_type := extension2contenttype(filename);
-//   content := ifx does_request_accept_encoding(request, "br") then file_cache_record.brotli else file_cache_record.rawcontent;
-//   content_encoding := ifx does_request_accept_encoding(request, "br") then "br" else "";
-//   send_html(request, content, content_type=content_type, content_encoding=content_encoding);
+//   free(request.write_data.data); request.write_data.data = null;
+//   add_to_epoll_fd_list(request.epoll_fd, request.socket.socket, null, EPOLLIN, mod=true); // Reset the socket to listen for reads
 // }
+
 
 // // todo: async? caching?
 // send_file :: (request: *Request, filename: string) {
@@ -388,8 +409,8 @@ add_to_epoll_fd_list :: (epoll_fd: s32, fd: s32, ptr: *void, ep_events: u32, $mo
   else   event.data.fd = fd;
   event.events = ep_events;
 
-  #if !mod if epoll_ctl(epoll_fd, Epoll_Ctl.ADD, fd, *event)  die("add epoll_ctl() ADD");
-  #if  mod if epoll_ctl(epoll_fd, Epoll_Ctl.MOD, fd, *event)  die("add epoll_ctl() MOD");
+  #if !mod if epoll_ctl(epoll_fd, .ADD, fd, *event)  die("add epoll_ctl() ADD");
+  #if  mod if epoll_ctl(epoll_fd, .MOD, fd, *event)  die("add epoll_ctl() MOD");
 }
 // remove_from_epoll_fd_list :: (fd: s32) {
 //   if epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, null)  die("remove epoll_ctl()");
@@ -422,7 +443,7 @@ get_ip_string_from_socket :: (socket: s32) -> string {
 #import,dir "modules/mysocket";
 
 #import "POSIX";
-#import "Linux"; // for epoll_create1
+#import "Linux";
 #import "File";
 #import "Thread";
 
